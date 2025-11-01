@@ -80,7 +80,6 @@
     <button id="langToggle" title="Français / English">FR/EN</button>
     <button id="themeToggle" title="Light / Dark">🌓</button>
     <button id="loginBtn" class="btn">Se connecter</button>
-    <button id="adminOpen" class="btn">Admin</button>
   </nav>
 </header>
 
@@ -152,11 +151,11 @@
   </div>
 </div>
 
-<!-- ADMIN MODAL -->
+<!-- ADMIN MODAL (opened only when admin logs in) -->
 <div id="adminModal" class="modal">
   <div class="card" style="padding:18px;max-width:900px">
     <h3>ADMIN DASHBOARD</h3>
-    <small>Mot de passe admin: <strong id="adminPwdHint">sashaadmin123</strong> (change it)</small>
+    <small>Admin: <strong id="adminNameHint">Natasha</strong></small>
 
     <hr />
     <h4>Ajouter un produit</h4>
@@ -166,6 +165,14 @@
       <input id="pQty" placeholder="Quantité" />
       <input id="pImage" type="file" accept="image/*" />
       <button id="addProduct" class="primary">Ajouter produit</button>
+    </div>
+
+    <hr />
+    <h4>Ajouter un service</h4>
+    <div style="display:grid;gap:6px">
+      <input id="sName" placeholder="Nom service (fr|en) ex: 'Soin de visage | Facial care'" />
+      <textarea id="sDesc" placeholder="Description (fr|en) ex: 'Nettoyage, masque | Cleansing, mask'"></textarea>
+      <button id="addService" class="primary">Ajouter service</button>
     </div>
 
     <hr />
@@ -191,9 +198,10 @@
 <script>
 // --------- App data + defaults ----------
 const APP = {
-  whatsappNumber: '+237XXXXXXXXX',
+  whatsappNumber: '+237690415513',
   fbLink: '',
-  adminPassword: 'sashaadmin123',
+  adminPassword: 'Puissance7',
+  adminUser: 'Natasha',
   lang: 'fr',
 };
 
@@ -230,7 +238,7 @@ function loadState(){
 // --------- app state ---------
 const persisted = loadState();
 const state = {
-  services: defaultServices,
+  services: persisted?.services || defaultServices,
   products: persisted?.products || sampleProducts,
   posts: persisted?.posts || [],
   users: persisted?.users || [],
@@ -245,8 +253,11 @@ const fluxList = document.getElementById('fluxList');
 const userGreeting = document.getElementById('userGreeting');
 const modal = document.getElementById('modal');
 const adminModal = document.getElementById('adminModal');
-const adminPwdHint = document.getElementById('adminPwdHint');
-adminPwdHint.textContent = APP.adminPassword;
+const adminNameHint = document.getElementById('adminNameHint');
+adminNameHint.textContent = APP.adminUser;
+
+// helper for pending action when guest is prompted to login
+window.pendingAction = null;
 
 // --------- renderers ----------
 function renderServices(){
@@ -292,9 +303,11 @@ function renderComments(){
 
 // --------- interactions ----------
 
+// open login modal
 document.getElementById('loginBtn').onclick = ()=>{ modal.style.display='grid'; }
 document.getElementById('closeModal').onclick = ()=>{ modal.style.display='none'; }
 
+// Sign up
 document.getElementById('signup').onclick = ()=>{
   const name = document.getElementById('nameInput').value.trim();
   const phone = document.getElementById('phoneInput').value.trim();
@@ -303,31 +316,43 @@ document.getElementById('signup').onclick = ()=>{
   if(state.users.find(u=>u.phone===phone)){alert('Utilisateur existe');return}
   const user = {id:'u'+Date.now(),name,phone,password:pwd,created:Date.now()};
   state.users.push(user); state.currentUser = user; saveState(); updateUI(); modal.style.display='none';
+  // run pending action if any
+  if(window.pendingAction){ window.pendingAction(); window.pendingAction = null; }
 }
 
+// Sign in (detect admin)
 document.getElementById('signin').onclick = ()=>{
   const phone = document.getElementById('phoneInput').value.trim();
   const pwd = document.getElementById('pwdInput').value.trim();
+
+  // Admin login detection
+  if(phone === APP.adminUser && pwd === APP.adminPassword){
+    state.currentUser = {id:'admin',name:APP.adminUser,isAdmin:true};
+    saveState(); updateUI(); modal.style.display='none';
+    adminModal.style.display='grid';
+    return;
+  }
+
+  // Regular user
   const u = state.users.find(x=>x.phone===phone && x.password===pwd);
   if(!u){alert('Utilisateur introuvable ou mot de passe incorrect'); return}
   state.currentUser = u; saveState(); updateUI(); modal.style.display='none';
+  // run pending action if any
+  if(window.pendingAction){ window.pendingAction(); window.pendingAction = null; }
 }
 
 function updateUI(){
   userGreeting.textContent = state.currentUser? state.currentUser.name : 'Invité';
+  // If admin is logged in, show admin panel
+  if(state.currentUser && state.currentUser.isAdmin){ adminModal.style.display='grid'; }
 }
 
-// admin open with password prompt (simple)
-document.getElementById('adminOpen').onclick = ()=>{
-  const pwd = prompt('Mot de passe admin:');
-  if(pwd===APP.adminPassword){ adminModal.style.display='grid'; }
-  else alert('Mot de passe invalide');
-}
-
+// close admin
 document.getElementById('closeAdmin').onclick = ()=>{ adminModal.style.display='none'; saveState(); }
 
-// add product
+// add product (admin)
 document.getElementById('addProduct').onclick = async ()=>{
+  if(!state.currentUser || !state.currentUser.isAdmin){ alert('Accès administrateur requis'); return }
   const name = document.getElementById('pName').value.trim();
   const price = Number(document.getElementById('pPrice').value)||0;
   const qty = Number(document.getElementById('pQty').value)||0;
@@ -338,8 +363,21 @@ document.getElementById('addProduct').onclick = async ()=>{
   state.products.push(p); saveState(); renderProducts(); renderComments(); alert('Produit ajouté');
 }
 
-// publish post
+// add service (admin)
+document.getElementById('addService').onclick = ()=>{
+  if(!state.currentUser || !state.currentUser.isAdmin){ alert('Accès administrateur requis'); return }
+  const rawName = document.getElementById('sName').value.trim();
+  const rawDesc = document.getElementById('sDesc').value.trim();
+  // expect format 'fr text | en text'
+  const [frTitle,enTitle] = rawName.split('|').map(x=>x?.trim()||'');
+  const [frDesc,enDesc] = rawDesc.split('|').map(x=>x?.trim()||'');
+  const s = {id:'s'+Date.now(),title:{fr:frTitle||rawName,en:enTitle||rawName},desc:{fr:frDesc||rawDesc,en:enDesc||rawDesc}};
+  state.services.push(s); saveState(); renderServices(); alert('Service ajouté');
+}
+
+// publish post (admin)
 document.getElementById('publishPost').onclick = async ()=>{
+  if(!state.currentUser || !state.currentUser.isAdmin){ alert('Accès administrateur requis'); return }
   const text = document.getElementById('postText').value.trim();
   const file = document.getElementById('postVideo').files[0];
   let video='';
@@ -348,8 +386,9 @@ document.getElementById('publishPost').onclick = async ()=>{
   saveState(); renderFlux(); alert('Publié');
 }
 
-// save settings
+// save settings (admin)
 document.getElementById('saveSettings').onclick = ()=>{
+  if(!state.currentUser || !state.currentUser.isAdmin){ alert('Accès administrateur requis'); return }
   APP.fbLink = document.getElementById('fbLink').value.trim();
   APP.whatsappNumber = document.getElementById('whatsappNumber').value.trim() || APP.whatsappNumber;
   saveState(); alert('Paramètres sauvegardés');
@@ -369,7 +408,17 @@ document.getElementById('sendChat').onclick = ()=>{
   document.getElementById('chatInput').value='';
 }
 
-// order actions (services/products) - open WhatsApp prefilled
+// order actions (services/products) - require login
+function ensureLogin(callback){
+  if(!state.currentUser){
+    // show login modal and store pending action
+    window.pendingAction = callback;
+    modal.style.display='grid';
+    return false;
+  }
+  return callback();
+}
+
 function openWhatsAppPrefill(text){
   const num = encodeURIComponent(APP.whatsappNumber.replace(/\s/g,''));
   const msg = encodeURIComponent(text);
@@ -377,24 +426,31 @@ function openWhatsAppPrefill(text){
   window.open(url,'_blank');
 }
 
+// central click handler requires login for orders/comments
 document.addEventListener('click',function(e){
   if(e.target.classList.contains('orderService')){
-    const id = e.target.dataset.id; const s = state.services.find(x=>x.id===id);
-    const name = state.currentUser?state.currentUser.name:'Invité';
-    const txt = `${APP.lang==='fr'?'Bonjour':'Hello'}, je souhaite commander le service: ${s.title[APP.lang]} - Client: ${name}`;
-    openWhatsAppPrefill(txt);
+    ensureLogin(()=>{
+      const id = e.target.dataset.id; const s = state.services.find(x=>x.id===id);
+      const name = state.currentUser?state.currentUser.name:'Invité';
+      const txt = `${APP.lang==='fr'?'Bonjour':'Hello'}, je souhaite commander le service: ${s.title[APP.lang]} - Client: ${name}`;
+      openWhatsAppPrefill(txt);
+    });
   }
   if(e.target.classList.contains('orderProd')){
-    const id = e.target.dataset.id; const p = state.products.find(x=>x.id===id);
-    const name = state.currentUser?state.currentUser.name:'Invité';
-    const txt = `${APP.lang==='fr'?'Bonjour':'Hello'}, je souhaite commander le produit: ${p.name} - Client: ${name}`;
-    openWhatsAppPrefill(txt);
+    ensureLogin(()=>{
+      const id = e.target.dataset.id; const p = state.products.find(x=>x.id===id);
+      const name = state.currentUser?state.currentUser.name:'Invité';
+      const txt = `${APP.lang==='fr'?'Bonjour':'Hello'}, je souhaite commander le produit: ${p.name} - Client: ${name}`;
+      openWhatsAppPrefill(txt);
+    });
   }
   if(e.target.classList.contains('cbtn')){
-    const pid = e.target.dataset.pid; const inp = document.querySelector(`input.cinput[data-pid='${pid}']`);
-    const text = inp.value.trim(); if(!text){alert('Entrez un commentaire');return}
-    const user = state.currentUser?state.currentUser.name:'Invité';
-    const p = state.products.find(x=>x.id===pid); p.comments = p.comments||[]; p.comments.push({name:user,text,date:Date.now()}); saveState(); renderComments(); inp.value='';
+    ensureLogin(()=>{
+      const pid = e.target.dataset.pid; const inp = document.querySelector(`input.cinput[data-pid='${pid}']`);
+      const text = inp.value.trim(); if(!text){alert('Entrez un commentaire');return}
+      const user = state.currentUser?state.currentUser.name:'Invité';
+      const p = state.products.find(x=>x.id===pid); p.comments = p.comments||[]; p.comments.push({name:user,text,date:Date.now()}); saveState(); renderComments(); inp.value='';
+    });
   }
 });
 
@@ -425,8 +481,12 @@ function translate(){
 // comments render on load
 renderServices(); renderProducts(); renderFlux(); renderComments(); updateUI();
 
-// small UX: close modals on outside click
-document.querySelectorAll('.modal').forEach(m=>m.addEventListener('click',e=>{ if(e.target===m) m.style.display='none'}));
+// execute pending action after modal close if user logged in
+// (also closes modal when clicking outside)
+document.querySelectorAll('.modal').forEach(m=>m.addEventListener('click',e=>{ if(e.target===m) {
+  m.style.display='none';
+  if(state.currentUser && window.pendingAction){ window.pendingAction(); window.pendingAction=null; }
+}}));
 
 // deploy helper: Export state to JSON
 window.exportState = ()=>{ const data = JSON.stringify({products:state.products,posts:state.posts,users:state.users},null,2); const blob=new Blob([data],{type:'application/json'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='bcs-data.json'; a.click(); }
